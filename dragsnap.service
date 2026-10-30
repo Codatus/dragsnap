@@ -1,0 +1,12 @@
+[Unit]
+Description=DragSnap - snap windows to screen edges while dragging
+# Started at login by dragsnap-start.desktop, because many lightweight desktops
+# (LXQt, Xfce, ...) never activate graphical-session.target.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/dragsnap
+Restart=on-failure
+RestartSec=3

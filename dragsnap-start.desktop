@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=DragSnap
+Comment=Starts the DragSnap service (snap windows to screen edges while dragging)
+Comment[de]=Startet den DragSnap-Dienst (Fenster beim Ziehen am Bildschirmrand andocken)
+Exec=sh -c "systemctl --user import-environment DISPLAY XAUTHORITY; systemctl --user reset-failed dragsnap.service; systemctl --user restart dragsnap.service"
+NoDisplay=true

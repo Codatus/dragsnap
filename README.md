@@ -23,9 +23,10 @@ It happens as soon as the pointer touches the edge – no need to let go first.
 ## Requirements
 
 - an X11 session (Wayland compositors handle this themselves)
-- an EWMH-compliant window manager without its own edge snapping – mainly
-  written for **Openbox** (LXQt, Lubuntu, LXDE), should also work with e.g.
-  Fluxbox, IceWM or i3 in floating mode
+- **Openbox** (LXQt, Lubuntu, LXDE). DragSnap recognises a move by the way
+  Openbox grabs the pointer for it (on its `_NET_SUPPORTING_WM_CHECK` window).
+  Other window managers without edge snapping are untested and may grab
+  differently – feedback is welcome.
 - Python 3, `xrandr`, and libXi, libXfixes, libXtst
 
 On Debian/Ubuntu:
@@ -71,11 +72,17 @@ To remove it:
 
 While a window manager moves a window, it grabs the pointer – other programs
 see no mouse events. Raw XInput2 events are delivered anyway. While the left
-button is held, DragSnap checks whether a window is being moved (by the move
-cursor the window manager shows, or by the window frame moving as a whole) and
-whether the pointer is at an outer screen edge. It then ends the move with a
-synthetic Return key – the window manager's own key for "finish moving" – and
-sends the new geometry as standard EWMH requests.
+button is held, DragSnap checks whether the pointer is at an outer screen edge
+and the window manager is moving a window: it has then grabbed the pointer on
+its own helper window, and either shows its move cursor or the window frame has
+moved as a whole. Applications that drag inside their own window – rotating a
+map or Street View, for example – never grab the pointer that way, so they do
+not trigger snapping. DragSnap only listens to the X server's notifications; it
+never grabs the pointer or keyboard itself.
+
+When both conditions hold, DragSnap ends the move with a synthetic Return key –
+the window manager's own key for "finish moving" – and sends the new geometry
+as standard EWMH requests.
 
 DragSnap does not poll: without a pressed mouse button it only receives button
 events, and only reads the pointer position while a button is held.

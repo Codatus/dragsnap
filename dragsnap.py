@@ -13,9 +13,13 @@ across.
 
 How it works: raw XInput2 events are delivered even while the window manager
 grabs the pointer for a move. While the left button is held, DragSnap checks
-on every motion whether a window is being moved - recognised by the move
-cursor ("fleur") the window manager shows, or by the window frame having
-moved as a whole - and whether the pointer is at an outer edge. It then ends
+on every motion whether the pointer is at an outer edge and the window
+manager is moving a window: it has then actively grabbed the pointer (the X
+server reports that as an enter event with grab mode on the grab window,
+for Openbox its supporting window;
+applications dragging inside their window, e.g. rotating a map, do not), and
+either shows its move cursor ("fleur") or the window frame has moved as a
+whole. DragSnap only listens, it never grabs anything itself. It then ends
 the move with a synthetic Return key and sends the new geometry as EWMH
 requests (_NET_WM_STATE, _NET_MOVERESIZE_WINDOW), respecting panels.
 
@@ -30,7 +34,7 @@ import subprocess
 import sys
 import time
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 LEFT_BUTTON = 1
 EDGE = 2  # pixels counted as "at the edge"
@@ -40,7 +44,9 @@ MOVE_CURSORS = {b"fleur", b"move", b"all-scroll"}
 GENERIC_EVENT = 35
 CLIENT_MESSAGE = 33
 XI_ALL_MASTER_DEVICES = 1
+XI_ENTER, XI_LEAVE = 7, 8
 RAW_BUTTON_PRESS, RAW_BUTTON_RELEASE, RAW_MOTION = 15, 16, 17
+XI_NOTIFY_GRAB, XI_NOTIFY_UNGRAB = 1, 2
 SUBSTRUCTURE_MASK = (1 << 19) | (1 << 20)  # SubstructureNotify | SubstructureRedirect
 NET_WM_STATE_REMOVE, NET_WM_STATE_ADD = 0, 1
 # _NET_MOVERESIZE_WINDOW: NorthWest gravity, x/y/width/height given, source: pager
@@ -79,6 +85,14 @@ class XIRawEvent(ctypes.Structure):
                 ("extension", ctypes.c_int), ("evtype", ctypes.c_int),
                 ("time", ctypes.c_ulong), ("deviceid", ctypes.c_int),
                 ("sourceid", ctypes.c_int), ("detail", ctypes.c_int)]
+
+
+class XIEnterEvent(ctypes.Structure):
+    _fields_ = XIRawEvent._fields_ + [
+        ("root", ctypes.c_ulong), ("event", ctypes.c_ulong), ("child", ctypes.c_ulong),
+        ("root_x", ctypes.c_double), ("root_y", ctypes.c_double),
+        ("event_x", ctypes.c_double), ("event_y", ctypes.c_double),
+        ("mode", ctypes.c_int)]
 
 
 class XClientMessageEvent(ctypes.Structure):
@@ -230,17 +244,32 @@ class X:
     def flush(self):
         self.xlib.XFlush(self.dpy)
 
-    def select(self, motion):
-        """Motion events are only wanted while the button is held."""
+    def _select(self, window, *evtypes):
         mask = (ctypes.c_ubyte * 4)()
-        for evtype in (RAW_BUTTON_PRESS, RAW_BUTTON_RELEASE) + ((RAW_MOTION,) if motion else ()):
+        for evtype in evtypes:
             mask[evtype >> 3] |= 1 << (evtype & 7)
         em = XIEventMask(XI_ALL_MASTER_DEVICES, len(mask), mask)
-        self.xi.XISelectEvents(self.dpy, self.root, ctypes.byref(em), 1)
+        self.xi.XISelectEvents(self.dpy, window, ctypes.byref(em), 1)
+
+    def select(self, motion):
+        """Motion and grab events are only wanted while the button is held.
+
+        Openbox grabs the pointer for a move on its supporting window
+        (_NET_SUPPORTING_WM_CHECK); the enter event announcing the grab goes
+        there."""
+        if motion:
+            self._select(self.root, RAW_BUTTON_PRESS, RAW_BUTTON_RELEASE, RAW_MOTION)
+            support = (self.property(self.root, "_NET_SUPPORTING_WM_CHECK", XA_WINDOW) or [0])[0]
+            if support:
+                self._select(support, XI_ENTER, XI_LEAVE)
+        else:
+            self._select(self.root, RAW_BUTTON_PRESS, RAW_BUTTON_RELEASE)
         self.flush()
 
     def raw_events(self):
-        """Yields (evtype, detail) for raw button and motion events, regardless of grabs."""
+        """Yields (evtype, detail, mode) for raw button and motion events, regardless
+        of grabs, and for enter/leave events on the selected windows (mode tells
+        whether a grab caused them)."""
         xlib, xi, dpy = self.xlib, self.xi, self.dpy
         opcode, event, error = ctypes.c_int(), ctypes.c_int(), ctypes.c_int()
         if not xlib.XQueryExtension(dpy, b"XInputExtension", ctypes.byref(opcode),
@@ -262,10 +291,12 @@ class X:
                 continue
             try:
                 raw = ctypes.cast(ev.xcookie.data, ctypes.POINTER(XIRawEvent)).contents
-                evtype, detail = raw.evtype, raw.detail
+                evtype, detail, mode = raw.evtype, raw.detail, None
+                if evtype in (XI_ENTER, XI_LEAVE):
+                    mode = ctypes.cast(ev.xcookie.data, ctypes.POINTER(XIEnterEvent)).contents.mode
             finally:
                 xlib.XFreeEventData(dpy, ctypes.byref(ev.xcookie))
-            yield evtype, detail
+            yield evtype, detail, mode
 
 
 # --- Monitors, edges and work areas ---
@@ -367,9 +398,17 @@ def snap(x, side, monitor, window=None):
 def main():
     x = X()
     pressed = None  # (frame, geometry) at button press, until snapped or released
+    wm_grab = False  # the window manager grabbed the pointer during this press
     log("ready")
-    for evtype, detail in x.raw_events():
+    for evtype, detail, mode in x.raw_events():
+        if evtype == XI_ENTER and mode == XI_NOTIFY_GRAB:
+            wm_grab = True
+            continue
+        if evtype == XI_LEAVE and mode == XI_NOTIFY_UNGRAB:
+            wm_grab = False
+            continue
         if evtype == RAW_BUTTON_PRESS and detail == LEFT_BUTTON:
+            wm_grab = False
             _, _, frame = x.pointer()
             before = x.geometry(frame) if frame else None
             pressed = (frame, before) if before else None
@@ -398,6 +437,12 @@ def main():
         # maximized windows stay put while Openbox moves them, so only the
         # cursor tells that a move is going on
         if not moved and cursor not in MOVE_CURSORS:
+            continue
+        # applications may show a move cursor too (e.g. Street View in a
+        # browser), but only a window manager move grabs the pointer outside
+        # the application's window
+        if not wm_grab:
+            log("no window manager grab, not a window move:", cursor)
             continue
         log("move", hex(frame), before, "->", after, "pointer", (px, py), cursor, "edge", edge[0])
         pressed = None

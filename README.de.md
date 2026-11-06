@@ -25,9 +25,11 @@ nötig.
 ## Voraussetzungen
 
 - eine X11-Sitzung (unter Wayland macht das der Compositor selbst)
-- ein EWMH-fähiger Fenstermanager ohne eigenes Kanten-Andocken – geschrieben
-  vor allem für **Openbox** (LXQt, Lubuntu, LXDE), sollte auch z. B. mit
-  Fluxbox, IceWM oder i3 im Floating-Modus gehen
+- **Openbox** (LXQt, Lubuntu, LXDE). DragSnap erkennt das Verschieben daran,
+  wie Openbox dafür den Mauszeiger festhält (über seinem
+  `_NET_SUPPORTING_WM_CHECK`-Fenster). Andere Fenstermanager ohne eigenes
+  Andocken sind ungetestet und machen das womöglich anders – über
+  Rückmeldungen freue ich mich.
 - Python 3, `xrandr` sowie libXi, libXfixes, libXtst
 
 Unter Debian/Ubuntu:
@@ -73,12 +75,18 @@ Entfernen:
 
 Während ein Fenstermanager ein Fenster verschiebt, hält er den Mauszeiger fest –
 andere Programme sehen keine Mausereignisse. Rohe XInput2-Ereignisse kommen
-trotzdem an. Solange die linke Taste gedrückt ist, prüft DragSnap, ob gerade ein
-Fenster verschoben wird (am Verschiebe-Mauszeiger des Fenstermanagers oder daran,
-dass sich der Fensterrahmen als Ganzes bewegt) und ob der Zeiger an einem
-äußeren Rand steht. Dann beendet es das Verschieben mit einem künstlichen
-Enter – der Taste, mit der der Fenstermanager selbst das Verschieben abschließt –
-und schickt die neue Geometrie als gewöhnliche EWMH-Anfrage.
+trotzdem an. Solange die linke Taste gedrückt ist, prüft DragSnap, ob der Zeiger
+an einem äußeren Rand steht und der Fenstermanager gerade ein Fenster verschiebt:
+Dann hält er den Mauszeiger über seinem eigenen Hilfsfenster fest und zeigt
+seinen Verschiebe-Mauszeiger, oder der Fensterrahmen hat sich als Ganzes bewegt.
+Programme, die innerhalb ihres Fensters ziehen – etwa eine Karte oder Street View
+drehen –, halten den Zeiger nie so fest und lösen deshalb nichts aus. DragSnap
+hört dabei nur auf die Meldungen des X-Servers und greift selbst nie nach Maus
+oder Tastatur.
+
+Trifft beides zu, beendet DragSnap das Verschieben mit einem künstlichen Enter –
+der Taste, mit der der Fenstermanager selbst das Verschieben abschließt – und
+schickt die neue Geometrie als gewöhnliche EWMH-Anfrage.
 
 DragSnap fragt nicht ständig ab: Ohne gedrückte Maustaste bekommt es nur
 Maustastenereignisse und liest die Zeigerposition nur, solange eine Taste gedrückt
